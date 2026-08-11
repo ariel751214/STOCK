@@ -12,12 +12,6 @@ st.caption("融合『財報看過去、護城河看現在、價值網看未來�
 st.sidebar.header("⚙️ 1. 股票與資金設定")
 raw_ticker = st.sidebar.text_input("股票 / ETF 代號 (如 NVDA, 2330, 2237, 0056)", value="2237").strip().upper()
 
-# 自動處理台股後綴 (.TW / .TWO)
-if raw_ticker.isdigit():
-    ticker_input = f"{raw_ticker}.TW"
-else:
-    ticker_input = raw_ticker
-
 capital = st.sidebar.number_input("您的帳戶總資金 (NT$ 或 US$)", value=100000, step=10000)
 market_ticker = st.sidebar.selectbox("對應大盤指數", ["^TWII (台股加權指數)", "^GSPC (標普500)"])
 
@@ -31,14 +25,14 @@ col_moat, col_vnet = st.columns(2)
 
 with col_moat:
     st.markdown("### 1. 護城河評估（看現在）")
-    moat_chk1 = st.checkbox("產品/技術具特許或示範資格，難被對手模仿取代", value=True if raw_ticker=="2237" else False)
+    moat_chk1 = st.checkbox("產品/技術具特許或示範資格，難被對手模仿取代", value=True if "2237" in raw_ticker else False)
     moat_chk2 = st.checkbox("具備『定價權』或成本轉嫁能力（毛利率穩定/升級成本能消化）")
-    moat_chk3 = st.checkbox("客戶轉換成本高，或具備母公司/生態系資源疊加壁壘", value=True if raw_ticker=="2237" else False)
+    moat_chk3 = st.checkbox("客戶轉換成本高，或具備母公司/生態系資源疊加壁壘", value=True if "2237" in raw_ticker else False)
 
 with col_vnet:
     st.markdown("### 2. 價值網評估（看未來）")
-    vnet_chk1 = st.checkbox("【顧客】受惠政策或趨勢，目標市場需求正在爆炸性湧入", value=True if raw_ticker=="2237" else False)
-    vnet_chk2 = st.checkbox("【互補者】整體產業生態系或母公司正在免費幫它放大價值", value=True if raw_ticker=="2237" else False)
+    vnet_chk1 = st.checkbox("【顧客】受惠政策或趨勢，目標市場需求正在爆炸性湧入", value=True if "2237" in raw_ticker else False)
+    vnet_chk2 = st.checkbox("【互補者】整體產業生態系或母公司正在免費幫它放大價值", value=True if "2237" in raw_ticker else False)
     vnet_chk3 = st.checkbox("【競爭者】市場呈現寡占或技術甩開對手，不必打惡性價格戰")
     vnet_chk4 = st.checkbox("【供應商】關鍵零組件與供應鏈穩定，不被單一廠商綁架")
 
@@ -50,22 +44,32 @@ st.markdown("---")
 if st.sidebar.button("🔍 開始綜合自動檢核"):
     with st.spinner("正在抓取最新數據與 K 線..."):
         try:
-            stock = yf.Ticker(ticker_input)
-            df = stock.history(period="2y")
-            
-            # 若上市 (.TW) 抓不到，自動嘗試上櫃 (.TWO)
-            if (df is None or df.empty) and raw_ticker.isdigit():
-                ticker_input = f"{raw_ticker}.TWO"
-                stock = yf.Ticker(ticker_input)
-                df = stock.history(period="2y")
+            df = pd.DataFrame()
+            stock = None
+            ticker_used = raw_ticker
 
-            if df is None or df.empty or len(df) < 20:
-                st.error("❌ 查無此股票代號或 K 線資料不足，請確認後重試！")
+            # 自動嘗試順序：原始輸入 -> .TWO (上櫃/興櫃) -> .TW (上市)
+            if raw_ticker.isdigit():
+                candidates = [f"{raw_ticker}.TWO", f"{raw_ticker}.TW"]
+            else:
+                candidates = [raw_ticker]
+
+            for t in candidates:
+                test_stock = yf.Ticker(t)
+                test_df = test_stock.history(period="2y")
+                if test_df is not None and not test_df.empty:
+                    df = test_df
+                    stock = test_stock
+                    ticker_used = t
+                    break
+
+            if df.empty or len(df) < 10:
+                st.error(f"❌ 查無代號 {raw_ticker} 或 K 線資料不足，請確認後重試！")
             else:
                 mkt_symbol = market_ticker.split(" ")[0]
                 mkt_df = yf.Ticker(mkt_symbol).history(period="1y")
                 
-                # --- 指標 1：財報 (看過去，支援新創/ETF 彈性處理) ---
+                # --- 指標 1：財報 (看過去) ---
                 financials = stock.quarterly_financials
                 chk1 = False
                 eps_growth, rev_growth, gross_margin = 0, 0, 0
@@ -90,7 +94,7 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                         is_etf = True
                         chk1 = True
                 else:
-                    chk1 = True # 新創模式或 ETF 自動通過財報硬性限制
+                    chk1 = True
 
                 # --- 指標 2：大盤趨勢 ---
                 chk2 = False
@@ -126,7 +130,7 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                     chk4 = (vol_recent < vol_prior) and (range_recent < range_prior)
 
                 # --- 綜合診斷看板 ---
-                st.subheader(f"📊 {raw_ticker} ({ticker_input}) GUGUGUA 綜合診斷看板")
+                st.subheader(f"📊 {raw_ticker} ({ticker_used}) GUGUGUA 綜合診斷看板")
                 
                 m1, m2, m3, m4 = st.columns(4)
                 if is_startup:
