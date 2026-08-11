@@ -25,22 +25,22 @@ if st.sidebar.button("🔍 開始自動檢核"):
     with st.spinner("正在抓取最新財報與 K 線數據..."):
         try:
             stock = yf.Ticker(ticker_input)
-            df = stock.history(period="1y")
+            df = stock.history(period="2y") # 擴增至 2 年以確保 200日均線數據充足
             
-            if df.empty and raw_ticker.isdigit():
+            if (df is None or df.empty) and raw_ticker.isdigit():
                 # 若 .TW 抓不到，嘗試 .TWO (上櫃)
                 ticker_input = f"{raw_ticker}.TWO"
                 stock = yf.Ticker(ticker_input)
-                df = stock.history(period="1y")
+                df = stock.history(period="2y")
 
-            if df.empty:
-                st.error("❌ 查無此股票代號，請確認後重試！")
+            if df is None or df.empty or len(df) < 50:
+                st.error("❌ 查無此股票代號或交易天數不足，請確認後重試！")
             else:
                 # 取得大盤數據
                 mkt_symbol = market_ticker.split(" ")[0]
-                mkt_df = yf.Ticker(mkt_symbol).history(period="6m")
+                mkt_df = yf.Ticker(mkt_symbol).history(period="1y")
                 
-                # --- 指標 1：基本面 (EPS & 營收季增，ETF 會自動彈性處理) ---
+                # --- 指標 1：基本面 (EPS & 營收季增) ---
                 financials = stock.quarterly_financials
                 chk1 = False
                 eps_growth, rev_growth = 0, 0
@@ -60,14 +60,16 @@ if st.sidebar.button("🔍 開始自動檢核"):
                             chk1 = True
                     except Exception:
                         is_etf = True
-                        chk1 = True # ETF 預設跳過個股財報限制
+                        chk1 = True
                 else:
                     is_etf = True
-                    chk1 = True # ETF 或無財報商品預設不卡關
+                    chk1 = True
 
                 # --- 指標 2：大盤趨勢 ---
-                mkt_sma50 = mkt_df['Close'].rolling(50).mean().iloc[-1]
-                chk2 = mkt_df['Close'].iloc[-1] > mkt_sma50
+                chk2 = False
+                if len(mkt_df) >= 50:
+                    mkt_sma50 = mkt_df['Close'].rolling(50).mean().iloc[-1]
+                    chk2 = mkt_df['Close'].iloc[-1] > mkt_sma50
 
                 # --- 指標 3：均線多頭排列 ---
                 df['SMA50'] = df['Close'].rolling(50).mean()
@@ -76,18 +78,26 @@ if st.sidebar.button("🔍 開始自動檢核"):
                 
                 curr_price = df['Close'].iloc[-1]
                 sma50 = df['SMA50'].iloc[-1]
-                sma150 = df['SMA150'].iloc[-1]
-                sma200 = df['SMA200'].iloc[-1]
                 
-                chk3 = (curr_price > sma50 > sma150 > sma200)
+                # 若歷史數據不滿 200 天，自動防護降級比較 50日與 150日
+                if len(df) >= 200 and not np.isnan(df['SMA200'].iloc[-1]):
+                    sma150 = df['SMA150'].iloc[-1]
+                    sma200 = df['SMA200'].iloc[-1]
+                    chk3 = (curr_price > sma50 > sma150 > sma200)
+                elif len(df) >= 150 and not np.isnan(df['SMA150'].iloc[-1]):
+                    sma150 = df['SMA150'].iloc[-1]
+                    chk3 = (curr_price > sma50 > sma150)
+                else:
+                    chk3 = (curr_price > sma50)
 
                 # --- 指標 4：VCP 型態 (波動與成交量收縮) ---
-                vol_recent = df['Volume'].iloc[-5:].mean()
-                vol_prior = df['Volume'].iloc[-20:-5].mean()
-                range_recent = (df['High'].iloc[-5:] - df['Low'].iloc[-5:]).mean()
-                range_prior = (df['High'].iloc[-20:-5] - df['Low'].iloc[-20:-5]).mean()
-                
-                chk4 = (vol_recent < vol_prior) and (range_recent < range_prior)
+                chk4 = False
+                if len(df) >= 20:
+                    vol_recent = df['Volume'].iloc[-5:].mean()
+                    vol_prior = df['Volume'].iloc[-20:-5].mean()
+                    range_recent = (df['High'].iloc[-5:] - df['Low'].iloc[-5:]).mean()
+                    range_prior = (df['High'].iloc[-20:-5] - df['Low'].iloc[-20:-5]).mean()
+                    chk4 = (vol_recent < vol_prior) and (range_recent < range_prior)
 
                 # --- 呈現四項指標結果 ---
                 st.subheader(f"📊 {raw_ticker} ({ticker_input}) 自動檢核結果")
@@ -99,7 +109,7 @@ if st.sidebar.button("🔍 開始自動檢核"):
                     c1.metric("1. 財報季增長", "✅ 通過" if chk1 else "❌ 未達標", f"EPS +{eps_growth:.1f}% / 營收 +{rev_growth:.1f}%")
                 
                 c2.metric("2. 大盤上升趨勢", "✅ 通過" if chk2 else "❌ 修正期", "指數 > 50MA")
-                c3.metric("3. 均線多頭排列", "✅ 通過" if chk3 else "❌ 非多頭", "現價 > 50 > 150 > 200MA")
+                c3.metric("3. 均線多頭排列", "✅ 通過" if chk3 else "❌ 非多頭", "現價 > 均線多頭")
                 c4.metric("4. VCP 波動收縮", "✅ 通過" if chk4 else "❌ 未收縮", "量縮且波幅窄")
 
                 all_passed = chk1 and chk2 and chk3 and chk4
@@ -108,9 +118,9 @@ if st.sidebar.button("🔍 開始自動檢核"):
                     st.success("🎉 所有條件均符合進場與風控標準！")
                     
                     # 風控計算
-                    stop_price = df['Low'].iloc[-10:].min() # 以近10日低點作為硬停損點
+                    stop_price = df['Low'].iloc[-10:].min()
                     risk_per_share = curr_price - stop_price
-                    risk_pct = (risk_per_share / curr_price) * 100
+                    risk_pct = (risk_per_share / curr_price) * 100 if curr_price > 0 else 0
                     
                     max_risk_amount = capital * 0.01
                     shares_to_buy = int(max_risk_amount // risk_per_share) if risk_per_share > 0 else 0
