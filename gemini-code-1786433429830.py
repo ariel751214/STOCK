@@ -3,9 +3,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="萬用雙引擎印鈔機系統", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="GUGUGUA 選股系統", page_icon="🚀", layout="wide")
 
-st.title("🚀 萬用雙引擎印鈔機 - 財女珍妮與 SEPA 全方位風控系統")
+st.title("🚀 GUGUGUA 選股 - 基本面與 SEPA 全方位風控系統")
 st.caption("融合『財報看過去、護城河看現在、價值網看未來』與新創彈性檢核模組")
 
 # 側邊欄設定
@@ -25,8 +25,8 @@ st.sidebar.markdown("---")
 st.sidebar.header("🚩 2. 特殊公司模組設定")
 is_startup = st.sidebar.checkbox("🐣 此公司為『新創 / 無歷史報表公司』", value=False, help="勾選後將免除過去 EPS 季增限制，改重護城河、價值網與 SEPA 技術面")
 
-# 主畫面：財女珍妮定性分析表
-st.subheader("🏰 財女珍妮：護城河與價值網定性檢核")
+# 主畫面：定性分析表
+st.subheader("🏰 核心基本面：護城河與價值網定性檢核")
 col_moat, col_vnet = st.columns(2)
 
 with col_moat:
@@ -126,7 +126,7 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                     chk4 = (vol_recent < vol_prior) and (range_recent < range_prior)
 
                 # --- 綜合診斷看板 ---
-                st.subheader(f"📊 {raw_ticker} ({ticker_input}) 綜合診斷看板")
+                st.subheader(f"📊 {raw_ticker} ({ticker_input}) GUGUGUA 綜合診斷看板")
                 
                 m1, m2, m3, m4 = st.columns(4)
                 if is_startup:
