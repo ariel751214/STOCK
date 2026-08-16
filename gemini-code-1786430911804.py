@@ -6,7 +6,7 @@ import numpy as np
 st.set_page_config(page_title="GUGUGUA 選股系統", page_icon="🚀", layout="wide")
 
 st.title("🚀 GUGUGUA 選股 - 基本面與 SEPA 全方位風控系統")
-st.caption("融合『財報看過去、護城河看現在、價值網看未來』與新創彈性檢核模組")
+st.caption("融合『財報看過去、護城河看現在、價值網看未來』與台股/美股自動風控模組")
 
 # 側邊欄設定
 st.sidebar.header("⚙️ 1. 股票與資金設定")
@@ -16,8 +16,9 @@ capital = st.sidebar.number_input("您的帳戶總資金 (NT$ 或 US$)", value=1
 market_ticker = st.sidebar.selectbox("對應大盤指數", ["^TWII (台股加權指數)", "^GSPC (標普500)"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("🚩 2. 特殊公司模組設定")
-is_startup = st.sidebar.checkbox("🐣 此公司為『新創 / 無歷史報表公司』", value=False, help="勾選後將免除過去 EPS 季增限制，改重護城河、價值網與 SEPA 技術面")
+st.sidebar.header("🚩 2. 財報彈性設定")
+is_startup = st.sidebar.checkbox("🐣 新創 / 無歷史報表模式 (豁免財報限制)", value=False)
+manual_financial_pass = st.sidebar.checkbox("📝 若台股財報抓取不足，手動認可基本面達標", value=True)
 
 # 主畫面：定性分析表
 st.subheader("🏰 核心基本面：護城河與價值網定性檢核")
@@ -48,7 +49,6 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
             stock = None
             ticker_used = raw_ticker
 
-            # 自動嘗試順序：原始輸入 -> .TW (上市) -> .TWO (上櫃)
             if raw_ticker.isdigit():
                 candidates = [f"{raw_ticker}.TW", f"{raw_ticker}.TWO"]
             else:
@@ -69,53 +69,50 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                 mkt_symbol = market_ticker.split(" ")[0]
                 mkt_df = yf.Ticker(mkt_symbol).history(period="1y")
                 
-                # 精確判斷是否為 ETF（如台股 00 開頭，或標題含 ETF）
                 is_etf = raw_ticker.startswith("00") or "ETF" in raw_ticker
 
                 # --- 指標 1：財報 (看過去) ---
-                financials = stock.quarterly_financials
                 chk1 = False
-                eps_growth, rev_growth, gross_margin = 0.0, 0.0, 0.0
-                financial_data_found = False
+                eps_growth, rev_growth = 0.0, 0.0
+                financial_status = "❌ 未達標"
 
-                if not is_startup and not is_etf:
+                if is_startup:
+                    chk1 = True
+                    financial_status = "🌱 新創豁免"
+                elif is_etf:
+                    chk1 = True
+                    financial_status = "ℹ️ ETF 商品"
+                else:
+                    financials = stock.quarterly_financials
+                    has_data = False
                     if financials is not None and not financials.empty and len(financials.columns) >= 2:
                         try:
-                            # 尋找營收欄位
-                            rev_key = None
-                            for k in ['Total Revenue', 'Operating Revenue']:
-                                if k in financials.index:
-                                    rev_key = k
-                                    break
+                            rev_key = next((k for k in ['Total Revenue', 'Operating Revenue'] if k in financials.index), None)
+                            net_key = next((k for k in ['Net Income', 'Net Income Common Stockholders'] if k in financials.index), None)
                             
-                            # 尋找淨利欄位
-                            net_key = None
-                            for k in ['Net Income', 'Net Income Common Stockholders']:
-                                if k in financials.index:
-                                    net_key = k
-                                    break
-
                             if rev_key and net_key:
                                 rev_curr = financials.loc[rev_key][0]
                                 rev_prev = financials.loc[rev_key][1]
-                                if rev_prev and rev_prev != 0:
-                                    rev_growth = ((rev_curr - rev_prev) / abs(rev_prev)) * 100
-
                                 net_curr = financials.loc[net_key][0]
                                 net_prev = financials.loc[net_key][1]
-                                if net_prev and net_prev != 0:
+                                
+                                if rev_prev != 0 and net_prev != 0:
+                                    rev_growth = ((rev_curr - rev_prev) / abs(rev_prev)) * 100
                                     eps_growth = ((net_curr - net_prev) / abs(net_prev)) * 100
-
-                                if 'Gross Profit' in financials.index and rev_curr != 0:
-                                    gross_margin = (financials.loc['Gross Profit'][0] / rev_curr) * 100
-
-                                financial_data_found = True
-                                if eps_growth > 20 and rev_growth > 15:
-                                    chk1 = True
+                                    has_data = True
+                                    if eps_growth > 20 and rev_growth > 15:
+                                        chk1 = True
+                                        financial_status = "✅ 通過"
                         except Exception:
-                            financial_data_found = False
-                else:
-                    chk1 = True # 新創模式或 ETF 自動豁免
+                            has_data = False
+
+                    if not has_data:
+                        if manual_financial_pass:
+                            chk1 = True
+                            financial_status = "📝 手動認可"
+                        else:
+                            chk1 = False
+                            financial_status = "⚠️ 資料不足"
 
                 # --- 指標 2：大盤趨勢 ---
                 chk2 = False
@@ -154,15 +151,7 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                 st.subheader(f"📊 {raw_ticker} ({ticker_used}) GUGUGUA 綜合診斷看板")
                 
                 m1, m2, m3, m4 = st.columns(4)
-                if is_startup:
-                    m1.metric("財報 (過去)", "🌱 新創模組", "豁免歷史報表限制")
-                elif is_etf:
-                    m1.metric("財報 (過去)", "ℹ️ ETF 商品", "自動不檢核個股財報")
-                elif not financial_data_found:
-                    m1.metric("財報 (過去)", "⚠️ 資料不足", "未抓取到完整財報")
-                else:
-                    m1.metric("財報 (過去)", "✅ 通過" if chk1 else "❌ 未達標", f"EPS +{eps_growth:.1f}% / 營收 +{rev_growth:.1f}%")
-                
+                m1.metric("財報 (過去)", financial_status, f"EPS +{eps_growth:.1f}% / 營收 +{rev_growth:.1f}%" if chk1 and financial_status == "✅ 通過" else "標準: EPS>20% 營收>15%")
                 m2.metric("護城河 (現在)", "✅ 具備" if moat_passed else "⚠️ 未勾全", "特許技術/定價權/轉嫁力")
                 m3.metric("價值網 (未來)", "✅ 爆發" if vnet_passed else "⚠️ 需觀察", "政策需求/生態系/供應鏈")
                 m4.metric("技術面 (SEPA)", "✅ 多頭VCP" if (chk2 and chk3 and chk4) else "❌ 未達標", "大盤/均線多頭/VCP量縮")
@@ -172,7 +161,6 @@ if st.sidebar.button("🔍 開始綜合自動檢核"):
                 if all_passed:
                     st.success("🎉 所有條件（財報/護城河/價值網/SEPA風控）全數通過，具備極強進場爆發潛力！")
                     
-                    # 1% 風控部位計算
                     stop_price = df['Low'].iloc[-10:].min()
                     risk_per_share = curr_price - stop_price
                     risk_pct = (risk_per_share / curr_price) * 100 if curr_price > 0 else 0
