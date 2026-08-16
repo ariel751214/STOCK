@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import time
 
 st.set_page_config(page_title="GUGUGUA 全自動選股系統", page_icon="🚀", layout="wide")
 
@@ -35,43 +36,71 @@ if manual_override:
 
 st.markdown("---")
 
-if st.sidebar.button("🔍 開始全自動深度檢核"):
-    with st.spinner("正在自動抓取完整財報、護城河、價值網、即時新聞與 K 線歷史..."):
-        try:
-            df = pd.DataFrame()
-            stock = None
-            ticker_used = raw_ticker
+# 快取數據抓取函數（快取 1 小時，避免被 Yahoo 限流）
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_stock_data(ticker_symbol):
+    stock_obj = yf.Ticker(ticker_symbol)
+    history_df = stock_obj.history(period="2y")
+    
+    # 若抓取不到，回傳空值
+    if history_df is None or history_df.empty:
+        return None, None, None, None, None
 
+    # 嘗試抓取財報
+    try:
+        q_fin = stock_obj.quarterly_income_stmt
+        if q_fin is None or q_fin.empty:
+            q_fin = stock_obj.quarterly_financials
+    except Exception:
+        q_fin = None
+
+    # 嘗試抓取 Info
+    try:
+        info_dict = stock_obj.info
+    except Exception:
+        info_dict = {}
+
+    # 嘗試抓取新聞
+    try:
+        news_data = stock_obj.news
+    except Exception:
+        news_data = []
+
+    return history_df, q_fin, info_dict, news_data, ticker_symbol
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market_data(mkt_sym):
+    m_stock = yf.Ticker(mkt_sym)
+    return m_stock.history(period="1y")
+
+if st.sidebar.button("🔍 開始全自動深度檢核"):
+    with st.spinner("正在安全提取數據與防限流解析中..."):
+        try:
+            df, q_fin, info, news_list, ticker_used = None, None, {}, [], raw_ticker
+
+            # 自動嘗試代號順序
             if raw_ticker.isdigit():
                 candidates = [f"{raw_ticker}.TW", f"{raw_ticker}.TWO"]
             else:
                 candidates = [raw_ticker]
 
-            for t in candidates:
-                test_stock = yf.Ticker(t)
-                test_df = test_stock.history(period="2y")
-                if test_df is not None and not test_df.empty:
-                    df = test_df
-                    stock = test_stock
-                    ticker_used = t
+            for c_ticker in candidates:
+                res_df, res_qfin, res_info, res_news, res_t = fetch_stock_data(c_ticker)
+                if res_df is not None and not res_df.empty:
+                    df, q_fin, info, news_list, ticker_used = res_df, res_qfin, res_info, res_news, res_t
                     break
 
-            if df.empty or len(df) < 10:
-                st.error(f"❌ 查無代號 {raw_ticker} 或 K 線資料不足，請確認代號是否正確！")
+            if df is None or df.empty or len(df) < 10:
+                st.error(f"❌ 查無代號 {raw_ticker} 或目前受到 Yahoo 流量限制，請稍候 1~2 分鐘後重試！")
             else:
                 mkt_symbol = market_ticker.split(" ")[0]
-                mkt_df = yf.Ticker(mkt_symbol).history(period="1y")
+                mkt_df = fetch_market_data(mkt_symbol)
                 
                 is_etf = raw_ticker.startswith("00") or "ETF" in raw_ticker
-                info = stock.info if hasattr(stock, 'info') else {}
 
                 # ==========================================
                 # 1. 財報（看過去）自動運算
                 # ==========================================
-                q_fin = stock.quarterly_income_stmt
-                if q_fin is None or q_fin.empty:
-                    q_fin = stock.quarterly_financials
-
                 rev_growth, eps_growth, gross_margin = 0.0, 0.0, 0.0
                 chk_finance = False
                 financial_status = "❌ 未達標"
@@ -132,13 +161,13 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 # ==========================================
                 # 2. 護城河（看現在）自動量化運算
                 # ==========================================
-                roe = (info.get('returnOnEquity', 0) or 0) * 100
-                op_margin = (info.get('operatingMargins', 0) or 0) * 100
-                g_margin = gross_margin if gross_margin > 0 else (info.get('grossMargins', 0) or 0) * 100
+                roe = (info.get('returnOnEquity', 0) or 0) * 100 if info else 0
+                op_margin = (info.get('operatingMargins', 0) or 0) * 100 if info else 0
+                g_margin = gross_margin if gross_margin > 0 else ((info.get('grossMargins', 0) or 0) * 100 if info else 0)
 
-                auto_moat_1 = roe >= 15.0
+                auto_moat_1 = (roe >= 15.0) or (roe == 0 and g_margin >= 35.0)
                 auto_moat_2 = g_margin >= 30.0
-                auto_moat_3 = op_margin >= 15.0
+                auto_moat_3 = op_margin >= 15.0 or (op_margin == 0 and g_margin >= 35.0)
 
                 if manual_override:
                     moat_passed = m_override_1 and m_override_2 and m_override_3
@@ -154,11 +183,11 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 # ==========================================
                 # 3. 價值網（看未來）自動量化運算
                 # ==========================================
-                net_margin = (info.get('profitMargins', 0) or 0) * 100
-                curr_ratio = info.get('currentRatio', 0) or 0.0
+                net_margin = (info.get('profitMargins', 0) or 0) * 100 if info else 0
+                curr_ratio = info.get('currentRatio', 0) or 0.0 if info else 0.0
 
                 auto_vnet_1 = rev_growth >= 10.0
-                auto_vnet_2 = net_margin >= 10.0
+                auto_vnet_2 = net_margin >= 10.0 or (net_margin == 0 and g_margin >= 30.0)
                 auto_vnet_3 = (curr_ratio >= 1.2) or (curr_ratio == 0.0)
 
                 if manual_override:
@@ -175,29 +204,27 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 # ==========================================
                 # 4. 新聞即時輿情與情緒分析
                 # ==========================================
-                news_list = stock.news if hasattr(stock, 'news') else []
                 pos_words = ['surge', 'jump', 'beat', 'gain', 'growth', 'record', 'high', 'boost', 'upgrade', 'profit', '創高', '大增', '買進', '看好', '成長', '突破']
                 neg_words = ['fall', 'drop', 'plunge', 'loss', 'miss', 'cut', 'downgrade', 'slump', 'risk', 'warning', '衰退', '跌破', '虧損', '下修', '風險', '警訊']
                 
-                pos_count = 0
-                neg_count = 0
+                pos_count, neg_count = 0, 0
                 parsed_news = []
 
-                for item in news_list[:6]:
-                    title = item.get('title', '')
-                    publisher = item.get('publisher', '財經新聞')
-                    link = item.get('link', '#')
-                    p_time = item.get('providerPublishTime', None)
-                    time_str = datetime.fromtimestamp(p_time).strftime('%Y-%m-%d %H:%M') if p_time else "近期"
-                    
-                    # 情緒計分
-                    title_lower = title.lower()
-                    for pw in pos_words:
-                        if pw in title_lower: pos_count += 1
-                    for nw in neg_words:
-                        if nw in title_lower: neg_count += 1
+                if news_list:
+                    for item in news_list[:6]:
+                        title = item.get('title', '')
+                        publisher = item.get('publisher', '財經新聞')
+                        link = item.get('link', '#')
+                        p_time = item.get('providerPublishTime', None)
+                        time_str = datetime.fromtimestamp(p_time).strftime('%Y-%m-%d %H:%M') if p_time else "近期"
+                        
+                        title_lower = title.lower()
+                        for pw in pos_words:
+                            if pw in title_lower: pos_count += 1
+                        for nw in neg_words:
+                            if nw in title_lower: neg_count += 1
 
-                    parsed_news.append({"時間": time_str, "來源": publisher, "標題": f"[{title}]({link})"})
+                        parsed_news.append({"時間": time_str, "來源": publisher, "標題": f"[{title}]({link})"})
 
                 if pos_count > neg_count:
                     news_sentiment = "🔥 正向偏多"
@@ -213,7 +240,7 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 # 5. 技術面 (SEPA) 自動運算
                 # ==========================================
                 chk_mkt = False
-                if len(mkt_df) >= 50:
+                if mkt_df is not None and len(mkt_df) >= 50:
                     mkt_sma50 = mkt_df['Close'].rolling(50).mean().iloc[-1]
                     chk_mkt = mkt_df['Close'].iloc[-1] > mkt_sma50
 
@@ -245,7 +272,7 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 chk_tech = chk_mkt and chk_ma and chk_vcp
 
                 # ==========================================
-                # 綜合診斷看板展示（5大維度）
+                # 綜合診斷看板展示
                 # ==========================================
                 st.subheader(f"📊 {raw_ticker} ({ticker_used}) GUGUGUA 全方位五大維度看板")
                 
@@ -256,7 +283,6 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 m4.metric("4. 新聞輿情", news_sentiment, news_desc)
                 m5.metric("5. 技術面 (SEPA)", "✅ 多頭突破臨界" if chk_tech else "❌ 結構未達標", "大盤/均線多頭/VCP量縮")
 
-                # 自動展開詳細的各項指標判定拆解
                 with st.expander("📑 查看系統自動抓取的【護城河、價值網與財報】完整量化明細", expanded=False):
                     c_a, c_b = st.columns(2)
                     with c_a:
@@ -266,7 +292,6 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                         st.markdown("#### 🌐 價值網量化明細")
                         st.table(pd.DataFrame(list(vnet_details.items()), columns=["指標名稱", "數值與標準"]))
 
-                # 自動展開即時新聞摘要清單
                 if parsed_news:
                     with st.expander(f"📰 查看 {raw_ticker} 最新相關即時財經新聞 ({len(parsed_news)} 則)", expanded=True):
                         for n in parsed_news:
@@ -289,15 +314,15 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     
                     st.markdown("---")
                     st.subheader("🦅 1% 風險控管建議買入部位")
-                    st.write(f"- 當前突破價：**NT$ {curr_price:.2f}**")
-                    st.write(f"- 自動建議硬停損價：**NT$ {stop_price:.2f}** (停損距離: {risk_pct:.1f}%)")
+                    st.write(f"- 當前突破價：**${curr_price:.2f}**")
+                    st.write(f"- 自動建議硬停損價：**${stop_price:.2f}** (停損距離: {risk_pct:.1f}%)")
                     
                     if risk_pct > 8.0:
                         st.warning("⚠️ 警告：目前停損距離超過 8%，代表波動收縮不夠緊密，建議等待價格重新整理！")
                     
                     st.markdown(f"👉 **建議買入數量：:red[{shares_to_buy:,} 股]**")
-                    st.write(f"- 單筆最大承擔虧損 (1%)：**NT$ {max_risk_amount:,.2f}**")
-                    st.write(f"- 動用總資金 (名目曝險)：**NT$ {exposure:,.2f}** (佔帳戶 {(exposure/capital)*100:.1f}%)")
+                    st.write(f"- 單筆最大承擔虧損 (1%)：**${max_risk_amount:,.2f}**")
+                    st.write(f"- 動用總資金 (名目曝險)：**${exposure:,.2f}** (佔帳戶 {(exposure/capital)*100:.1f}%)")
                 else:
                     st.error("⛔ 交易否決：未完全符合嚴格標準，系統已自動為您攔截潛在投資風險！")
 
