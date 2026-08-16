@@ -13,7 +13,7 @@ st.caption("專為新手設計：自動分析『高成長飆股突破』與『�
 
 # 側邊欄設定
 st.sidebar.header("⚙️ 1. 股票與資金設定")
-raw_ticker = st.sidebar.text_input("股票 / ETF 代號 (如 2330, 2412, NVDA, 0056)", value="2412").strip().upper()
+raw_ticker = st.sidebar.text_input("股票 / ETF 代號 (如 2330, 2412, NVDA, 0056)", value="0056").strip().upper()
 
 capital = st.sidebar.number_input("您的可用投資閒錢 (NT$ 或 US$)", value=100000, step=10000, help="請輸入專門用於股票投資的閒置資金，切勿輸入生活費或緊急預備金")
 market_ticker = st.sidebar.selectbox("對應大盤指數", ["^TWII (台股加權指數)", "^GSPC (標普500)"])
@@ -59,14 +59,11 @@ def fetch_rss_news(symbol):
         pass
     return news_items
 
-# 快取數據抓取函數（改用 yf.download 搭配 Ticker 備援）
+# 快取數據抓取函數
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_stock_data(ticker_symbol):
     try:
-        # 1. 優先使用 yf.download 抓取 K 線（最穩定不卡頓）
         history_df = yf.download(ticker_symbol, period="2y", progress=False)
-        
-        # 處理 MultiIndex 欄位問題
         if isinstance(history_df.columns, pd.MultiIndex):
             history_df.columns = history_df.columns.get_level_values(0)
 
@@ -79,7 +76,6 @@ def fetch_stock_data(ticker_symbol):
         if history_df is None or history_df.empty:
             return None, None, None, ticker_symbol
 
-        # 2. 抓取財報
         try:
             q_fin = stock_obj.quarterly_income_stmt
             if q_fin is None or q_fin.empty:
@@ -87,7 +83,6 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             q_fin = None
 
-        # 3. 抓取 Info
         try:
             info_dict = stock_obj.fast_info
             info_data = {
@@ -137,7 +132,14 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                 # 1. 規模判斷
                 market_cap = info.get('marketCap', 0) or 0
                 is_large_cap = market_cap >= 10_000_000_000 or raw_ticker in ["2330", "2412", "NVDA", "AAPL", "MSFT", "2454", "2317"]
-                cap_label = "大型權值巨頭" if is_large_cap else "中小型潛力股"
+                
+                if is_etf:
+                    cap_label = "指數型 ETF 產品"
+                elif is_large_cap:
+                    cap_label = "大型權值巨頭"
+                else:
+                    cap_label = "中小型潛力股"
+
                 req_eps = 15.0 if is_large_cap else 20.0
                 req_rev = 10.0 if is_large_cap else 15.0
 
@@ -171,8 +173,8 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                             pass
 
                 # 3. 護城河與價值網
-                moat_pass = gross_margin >= 25.0 or is_large_cap
-                vnet_pass = rev_growth >= 0.0 or is_large_cap
+                moat_pass = gross_margin >= 25.0 or is_large_cap or is_etf
+                vnet_pass = rev_growth >= 0.0 or is_large_cap or is_etf
 
                 # 4. 技術面 (SEPA)
                 df['SMA50'] = df['Close'].rolling(50).mean()
@@ -197,7 +199,7 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                     range_prior = (df['High'].iloc[-20:-5] - df['Low'].iloc[-20:-5]).mean()
                     chk_vcp = bool((vol_recent < vol_prior) and (range_recent < range_prior))
 
-                growth_finance_pass = (eps_growth > req_eps and rev_growth > req_rev) or is_startup or is_etf
+                growth_finance_pass = (eps_growth > req_eps and rev_growth > req_rev) if not (is_startup or is_etf) else True
                 tech_sepa_pass = chk_ma and chk_vcp
 
                 # ==========================================
@@ -207,8 +209,12 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                 
                 c1, c2, c3 = st.columns(3)
                 c1.metric("公司屬性", cap_label, f"現價 NT$ {curr_price:.2f}")
-                c2.metric("最新季 EPS 成長率", f"{eps_growth:+.2f}%", f"成長股門檻 > {req_eps}%")
-                c3.metric("最新季營收成長率", f"{rev_growth:+.2f}%", f"成長股門檻 > {req_rev}%")
+                if is_etf:
+                    c2.metric("最新季 EPS 成長率", "ETF 不適用", "一籃子分散持股")
+                    c3.metric("最新季營收成長率", "ETF 不適用", "指數成分股配置")
+                else:
+                    c2.metric("最新季 EPS 成長率", f"{eps_growth:+.2f}%", f"門檻 > {req_eps}%")
+                    c3.metric("最新季營收成長率", f"{rev_growth:+.2f}%", f"門檻 > {req_rev}%")
 
                 st.markdown("---")
 
@@ -220,7 +226,7 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                 # --- 策略 A：高成長價差 ---
                 with tab_growth:
                     st.markdown("### 🎯 適合目標：追求短中期股價爆發力、賺取波段價差")
-                    if growth_finance_pass and tech_sepa_pass and moat_pass:
+                    if growth_finance_pass and tech_sepa_pass and moat_pass and not is_etf:
                         st.success("✅ **【建議進場】符合高成長 SEPA 飆股突破標準！**")
                         
                         stop_price = float(df['Low'].iloc[-10:].min())
@@ -238,23 +244,34 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                         st.write(f"- 動用總資金 (名目曝險)：**NT$ {exposure:,.2f}** (佔投資閒錢 {(exposure/capital)*100:.1f}%)")
                     else:
                         st.error("⛔ **【暫不適合價差突破】未達飆股進場標準，原因如下：**")
-                        if not growth_finance_pass:
-                            st.write(f"❌ **獲利成長動能不足**：EPS 成長 {eps_growth:+.1f}% (門檻 >{req_eps}%) 或營收成長 {rev_growth:+.1f}% (門檻 >{req_rev}%)，代表近期沒有爆炸性業績支撐股價快速飆漲。")
-                        if not chk_ma:
-                            st.write("❌ **均線未呈多頭排列**：股價未處於均線之上發散，代表目前沒有主力大資金在強烈推升趨勢。")
-                        if not chk_vcp:
-                            st.write("❌ **波動未完成收縮 (VCP)**：近期振幅或成交量未收窄，代表市場浮額尚未清洗乾淨，容易買在震盪洗盤區。")
+                        
+                        if is_etf:
+                            st.write("ℹ️ **標的性質為指數型 ETF**：ETF 是一籃子股票分散組合，價格隨大盤指數緩步推進，天生缺乏單一個股的『高 EPS 爆發性』與『VCP 籌碼收斂突破型態』，不適合作為短線飆股價差操作。")
+                        else:
+                            if not growth_finance_pass:
+                                st.write(f"❌ **獲利成長動能不足**：EPS 成長 {eps_growth:+.1f}% (門檻 >{req_eps}%) 或營收成長 {rev_growth:+.1f}% (門檻 >{req_rev}%)，代表近期沒有爆炸性業績支撐股價快速飆漲。")
+                            if not chk_ma:
+                                st.write("❌ **均線未呈多頭排列**：股價未處於均線之上發散（50MA > 150MA > 200MA），代表目前沒有主力大資金在強烈推升攻擊趨勢。")
+                            if not chk_vcp:
+                                st.write("❌ **波動未完成收縮 (VCP)**：近期價格波動幅度與成交量未呈現階梯式收窄，代表市場浮額尚未清洗乾淨，容易買在震盪洗盤區。")
 
                 # --- 策略 B：穩健領息存股 ---
                 with tab_dividend:
                     st.markdown("### 🛡️ 適合目標：追求長期穩定配息、低波動、睡得著覺的資產配置")
-                    if moat_pass and vnet_pass and (gross_margin >= 20.0 or is_large_cap):
+                    if is_etf or (moat_pass and vnet_pass and (gross_margin >= 20.0 or is_large_cap)):
                         st.success("✅ **【極為適合領息存股】具備頂級護城河與防禦體質！**")
-                        st.markdown(f"""
-                        * **護城河極深**：毛利率達 **{gross_margin:.1f}%** 且具備產業特許/龍頭地位，產品難以被對手取代。
-                        * **營運穩健抗跌**：即便獲利沒有爆發性成長，但現金流與營收穩定，倒閉或大幅虧損風險極低。
-                        * **存股建議**：此類股票（如中華電信 2412）不需理會短期的技術指標波動，適合採取**定期定額分批買進、長期領取股息**的配置策略。
-                        """)
+                        if is_etf:
+                            st.markdown(f"""
+                            * **一籃子分散風險**：`{raw_ticker}` 為高股息/指數型 ETF，持有多檔優質龍頭成分股，完全免除單一公司倒閉或財報造假的下檔風險。
+                            * **被動現金流首選**：成分股定期汰弱留強，配息穩定度高，是打造長期被動收入與退休資產配置的核心工具。
+                            * **存股建議**：不需理會短期的技術線型震盪，適合採取**『定期定額分批買進、股息再投入』**策略長期累積張數。
+                            """)
+                        else:
+                            st.markdown(f"""
+                            * **護城河極深**：毛利率達 **{gross_margin:.1f}%** 且具備產業特許/龍頭地位，產品難以被對手取代。
+                            * **營運穩健抗跌**：即便獲利沒有爆發性成長，但現金流與營收穩定，倒閉或大幅虧損風險極低。
+                            * **存股建議**：此類股票不需理會短期的技術指標波動，適合採取**定期定額分批買進、長期領取股息**的配置策略。
+                            """)
                     else:
                         st.warning("⚠️ **【領息需謹慎】** 該公司毛利較低或營運波動較大，長期存股需留意配息穩定度。")
 
