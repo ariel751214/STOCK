@@ -59,16 +59,27 @@ def fetch_rss_news(symbol):
         pass
     return news_items
 
-# 快取數據抓取函數（1 小時快取保護）
+# 快取數據抓取函數（改用 yf.download 搭配 Ticker 備援）
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_stock_data(ticker_symbol):
     try:
-        stock_obj = yf.Ticker(ticker_symbol)
-        history_df = stock_obj.history(period="2y")
+        # 1. 優先使用 yf.download 抓取 K 線（最穩定不卡頓）
+        history_df = yf.download(ticker_symbol, period="2y", progress=False)
         
+        # 處理 MultiIndex 欄位問題
+        if isinstance(history_df.columns, pd.MultiIndex):
+            history_df.columns = history_df.columns.get_level_values(0)
+
+        if history_df is None or history_df.empty:
+            stock_obj = yf.Ticker(ticker_symbol)
+            history_df = stock_obj.history(period="2y")
+        else:
+            stock_obj = yf.Ticker(ticker_symbol)
+
         if history_df is None or history_df.empty:
             return None, None, None, ticker_symbol
 
+        # 2. 抓取財報
         try:
             q_fin = stock_obj.quarterly_income_stmt
             if q_fin is None or q_fin.empty:
@@ -76,6 +87,7 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             q_fin = None
 
+        # 3. 抓取 Info
         try:
             info_dict = stock_obj.fast_info
             info_data = {
@@ -92,7 +104,10 @@ def fetch_stock_data(ticker_symbol):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(mkt_sym):
     try:
-        return yf.Ticker(mkt_sym).history(period="1y")
+        mkt_df = yf.download(mkt_sym, period="1y", progress=False)
+        if isinstance(mkt_df.columns, pd.MultiIndex):
+            mkt_df.columns = mkt_df.columns.get_level_values(0)
+        return mkt_df
     except Exception:
         return None
 
@@ -112,8 +127,8 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                     df, q_fin, info, ticker_used = res_df, res_qfin, res_info, res_t
                     break
 
-            if df is None or df.empty or len(df) < 10:
-                st.error(f"❌ 查無代號 {raw_ticker} 或連線忙碌，請確認代號後重試！")
+            if df is None or df.empty or len(df) < 5:
+                st.error(f"❌ 查無代號 {raw_ticker}，請確認代號格式是否正確！")
             else:
                 mkt_symbol = market_ticker.split(" ")[0]
                 mkt_df = fetch_market_data(mkt_symbol)
@@ -157,20 +172,20 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
 
                 # 3. 護城河與價值網
                 moat_pass = gross_margin >= 25.0 or is_large_cap
-                vnet_pass = rev_growth >= 0.0 or is_large_cap # 營運不衰退即具備基本防禦力
+                vnet_pass = rev_growth >= 0.0 or is_large_cap
 
                 # 4. 技術面 (SEPA)
                 df['SMA50'] = df['Close'].rolling(50).mean()
                 df['SMA150'] = df['Close'].rolling(150).mean()
                 df['SMA200'] = df['Close'].rolling(200).mean()
-                curr_price = df['Close'].iloc[-1]
-                sma50 = df['SMA50'].iloc[-1]
+                curr_price = float(df['Close'].iloc[-1])
+                sma50 = float(df['SMA50'].iloc[-1])
 
                 chk_ma = False
                 if len(df) >= 200 and not np.isnan(df['SMA200'].iloc[-1]):
-                    chk_ma = (curr_price > sma50 > df['SMA150'].iloc[-1] > df['SMA200'].iloc[-1])
+                    chk_ma = (curr_price > sma50 > float(df['SMA150'].iloc[-1]) > float(df['SMA200'].iloc[-1]))
                 elif len(df) >= 150 and not np.isnan(df['SMA150'].iloc[-1]):
-                    chk_ma = (curr_price > sma50 > df['SMA150'].iloc[-1])
+                    chk_ma = (curr_price > sma50 > float(df['SMA150'].iloc[-1]))
                 else:
                     chk_ma = (curr_price > sma50)
 
@@ -180,7 +195,7 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                     vol_prior = df['Volume'].iloc[-20:-5].mean()
                     range_recent = (df['High'].iloc[-5:] - df['Low'].iloc[-5:]).mean()
                     range_prior = (df['High'].iloc[-20:-5] - df['Low'].iloc[-20:-5]).mean()
-                    chk_vcp = (vol_recent < vol_prior) and (range_recent < range_prior)
+                    chk_vcp = bool((vol_recent < vol_prior) and (range_recent < range_prior))
 
                 growth_finance_pass = (eps_growth > req_eps and rev_growth > req_rev) or is_startup or is_etf
                 tech_sepa_pass = chk_ma and chk_vcp
@@ -191,7 +206,7 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                 st.subheader(f"📊 {raw_ticker} ({ticker_used}) 智能診斷摘要")
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("公司屬性", cap_label, f"股價 NT$ {curr_price:.2f}")
+                c1.metric("公司屬性", cap_label, f"現價 NT$ {curr_price:.2f}")
                 c2.metric("最新季 EPS 成長率", f"{eps_growth:+.2f}%", f"成長股門檻 > {req_eps}%")
                 c3.metric("最新季營收成長率", f"{rev_growth:+.2f}%", f"成長股門檻 > {req_rev}%")
 
@@ -208,8 +223,7 @@ if st.sidebar.button("🔍 開始全方位智能診斷"):
                     if growth_finance_pass and tech_sepa_pass and moat_pass:
                         st.success("✅ **【建議進場】符合高成長 SEPA 飆股突破標準！**")
                         
-                        # 1% 風控計算
-                        stop_price = df['Low'].iloc[-10:].min()
+                        stop_price = float(df['Low'].iloc[-10:].min())
                         risk_per_share = curr_price - stop_price
                         risk_pct = (risk_per_share / curr_price) * 100 if curr_price > 0 else 0
                         max_risk_amount = capital * 0.01
