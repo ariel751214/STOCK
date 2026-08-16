@@ -3,12 +3,11 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import time
 
 st.set_page_config(page_title="GUGUGUA 全自動選股系統", page_icon="🚀", layout="wide")
 
 st.title("🚀 GUGUGUA 選股 - 基本面、新聞情緒與 SEPA 風控系統")
-st.caption("全自動解析『財報、護城河、價值網、即時新聞情緒』與 SEPA 1% 風控")
+st.caption("全自動解析『財報、護城河、價值網、即時新聞與直達連結』，內建市值自動分級檢核與 SEPA 1% 風控")
 
 # 側邊欄設定
 st.sidebar.header("⚙️ 1. 股票與資金設定")
@@ -36,17 +35,15 @@ if manual_override:
 
 st.markdown("---")
 
-# 快取數據抓取函數（快取 1 小時，避免被 Yahoo 限流）
+# 快取數據抓取函數（1 小時快取保護）
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_stock_data(ticker_symbol):
     stock_obj = yf.Ticker(ticker_symbol)
     history_df = stock_obj.history(period="2y")
     
-    # 若抓取不到，回傳空值
     if history_df is None or history_df.empty:
         return None, None, None, None, None
 
-    # 嘗試抓取財報
     try:
         q_fin = stock_obj.quarterly_income_stmt
         if q_fin is None or q_fin.empty:
@@ -54,13 +51,11 @@ def fetch_stock_data(ticker_symbol):
     except Exception:
         q_fin = None
 
-    # 嘗試抓取 Info
     try:
         info_dict = stock_obj.info
     except Exception:
         info_dict = {}
 
-    # 嘗試抓取新聞
     try:
         news_data = stock_obj.news
     except Exception:
@@ -74,11 +69,10 @@ def fetch_market_data(mkt_sym):
     return m_stock.history(period="1y")
 
 if st.sidebar.button("🔍 開始全自動深度檢核"):
-    with st.spinner("正在安全提取數據與防限流解析中..."):
+    with st.spinner("正在自動解析財報分級、護城河、價值網、新聞與 K 線..."):
         try:
             df, q_fin, info, news_list, ticker_used = None, None, {}, [], raw_ticker
 
-            # 自動嘗試代號順序
             if raw_ticker.isdigit():
                 candidates = [f"{raw_ticker}.TW", f"{raw_ticker}.TWO"]
             else:
@@ -91,12 +85,22 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     break
 
             if df is None or df.empty or len(df) < 10:
-                st.error(f"❌ 查無代號 {raw_ticker} 或目前受到 Yahoo 流量限制，請稍候 1~2 分鐘後重試！")
+                st.error(f"❌ 查無代號 {raw_ticker} 或 K 線資料不足，請確認後重試！")
             else:
                 mkt_symbol = market_ticker.split(" ")[0]
                 mkt_df = fetch_market_data(mkt_symbol)
                 
                 is_etf = raw_ticker.startswith("00") or "ETF" in raw_ticker
+
+                # ==========================================
+                # 0. 市值自動辨識 (大型股 vs 中小型股)
+                # ==========================================
+                market_cap = info.get('marketCap', 0) or 0
+                is_large_cap = market_cap >= 10_000_000_000 # 100 億美元或約 3000 億台幣以上
+                
+                req_eps = 15.0 if is_large_cap else 20.0
+                req_rev = 10.0 if is_large_cap else 15.0
+                cap_label = "大型權值巨頭" if is_large_cap else "中小型成長股"
 
                 # ==========================================
                 # 1. 財報（看過去）自動運算
@@ -133,13 +137,14 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                             if gp_row and rev_c != 0: gross_margin = (float(q_fin.loc[gp_row].iloc[0]) / rev_c) * 100
 
                             fin_details = {
+                                "公司市值分類": f"{cap_label} ({market_cap:,.0f})" if market_cap > 0 else cap_label,
                                 "最新季營收": f"{rev_c:,.0f}",
-                                "營收季增率 (QoQ)": f"{rev_growth:+.2f}% (標準 > 15%)",
+                                "營收季增率 (QoQ)": f"{rev_growth:+.2f}% (門檻 > {req_rev}%)",
                                 "最新季淨利": f"{net_c:,.0f}",
-                                "淨利季增率 (QoQ)": f"{eps_growth:+.2f}% (標準 > 20%)",
+                                "淨利季增率 (QoQ)": f"{eps_growth:+.2f}% (門檻 > {req_eps}%)",
                                 "最新季毛利率": f"{gross_margin:.2f}%"
                             }
-                            if eps_growth > 20 and rev_growth > 15:
+                            if eps_growth > req_eps and rev_growth > req_rev:
                                 chk_finance = True
                                 financial_status = "✅ 通過"
                         except Exception:
@@ -150,11 +155,12 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                         eps_growth = (info.get('earningsGrowth', 0) or 0) * 100
                         gross_margin = (info.get('grossMargins', 0) or 0) * 100
                         fin_details = {
-                            "營收年增率 (YoY)": f"{rev_growth:+.2f}% (標準 > 15%)",
-                            "盈餘年增率 (YoY)": f"{eps_growth:+.2f}% (標準 > 20%)",
+                            "公司市值分類": f"{cap_label} ({market_cap:,.0f})" if market_cap > 0 else cap_label,
+                            "營收年增率 (YoY)": f"{rev_growth:+.2f}% (門檻 > {req_rev}%)",
+                            "盈餘年增率 (YoY)": f"{eps_growth:+.2f}% (門檻 > {req_eps}%)",
                             "毛利率": f"{gross_margin:.2f}%"
                         }
-                        if eps_growth > 20 and rev_growth > 15:
+                        if eps_growth > req_eps and rev_growth > req_rev:
                             chk_finance = True
                             financial_status = "✅ 通過"
 
@@ -186,7 +192,7 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 net_margin = (info.get('profitMargins', 0) or 0) * 100 if info else 0
                 curr_ratio = info.get('currentRatio', 0) or 0.0 if info else 0.0
 
-                auto_vnet_1 = rev_growth >= 10.0
+                auto_vnet_1 = rev_growth >= (8.0 if is_large_cap else 10.0)
                 auto_vnet_2 = net_margin >= 10.0 or (net_margin == 0 and g_margin >= 30.0)
                 auto_vnet_3 = (curr_ratio >= 1.2) or (curr_ratio == 0.0)
 
@@ -196,13 +202,13 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     vnet_passed = (auto_vnet_1 and auto_vnet_2 and auto_vnet_3) if not is_etf else True
 
                 vnet_details = {
-                    "【顧客需求湧入】營收成長動能": f"{rev_growth:+.2f}% ({'✅ 通過 >=10%' if auto_vnet_1 else '❌ 未達標'})",
+                    "【顧客需求湧入】營收成長動能": f"{rev_growth:+.2f}% ({'✅ 通過' if auto_vnet_1 else '❌ 未達標'})",
                     "【甩開價格戰】稅後淨利率": f"{net_margin:.2f}% ({'✅ 通過 >=10%' if auto_vnet_2 else '❌ 未達標'})",
                     "【供應鏈與現金抗風險】流動比率": f"{curr_ratio:.2f} ({'✅ 通過 >=1.2' if auto_vnet_3 else '❌ 未達標'})"
                 }
 
                 # ==========================================
-                # 4. 新聞即時輿情與情緒分析
+                # 4. 新聞即時輿情與完整超連結
                 # ==========================================
                 pos_words = ['surge', 'jump', 'beat', 'gain', 'growth', 'record', 'high', 'boost', 'upgrade', 'profit', '創高', '大增', '買進', '看好', '成長', '突破']
                 neg_words = ['fall', 'drop', 'plunge', 'loss', 'miss', 'cut', 'downgrade', 'slump', 'risk', 'warning', '衰退', '跌破', '虧損', '下修', '風險', '警訊']
@@ -211,10 +217,10 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 parsed_news = []
 
                 if news_list:
-                    for item in news_list[:6]:
+                    for item in news_list[:8]:
                         title = item.get('title', '')
-                        publisher = item.get('publisher', '財經新聞')
-                        link = item.get('link', '#')
+                        publisher = item.get('publisher', '財經媒體')
+                        link = item.get('link', '')
                         p_time = item.get('providerPublishTime', None)
                         time_str = datetime.fromtimestamp(p_time).strftime('%Y-%m-%d %H:%M') if p_time else "近期"
                         
@@ -224,7 +230,12 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                         for nw in neg_words:
                             if nw in title_lower: neg_count += 1
 
-                        parsed_news.append({"時間": time_str, "來源": publisher, "標題": f"[{title}]({link})"})
+                        parsed_news.append({
+                            "時間": time_str,
+                            "媒體": publisher,
+                            "標題": title,
+                            "網址": link
+                        })
 
                 if pos_count > neg_count:
                     news_sentiment = "🔥 正向偏多"
@@ -277,12 +288,13 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                 st.subheader(f"📊 {raw_ticker} ({ticker_used}) GUGUGUA 全方位五大維度看板")
                 
                 m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("1. 財報 (過去)", financial_status, f"EPS {eps_growth:+.1f}% / 營收 {rev_growth:+.1f}%" if fin_details else "無數據")
+                m1.metric(f"1. 財報 ({cap_label})", financial_status, f"EPS {eps_growth:+.1f}% / 營收 {rev_growth:+.1f}%" if fin_details else "無數據")
                 m2.metric("2. 護城河 (現在)", "✅ 具備強護城河" if moat_passed else "❌ 護城河不足", "自動計算 ROE/毛利/營業利益")
                 m3.metric("3. 價值網 (未來)", "✅ 具爆發擴張力" if vnet_passed else "❌ 價值網受阻", "自動計算 營收動能/淨利率/流動比")
                 m4.metric("4. 新聞輿情", news_sentiment, news_desc)
                 m5.metric("5. 技術面 (SEPA)", "✅ 多頭突破臨界" if chk_tech else "❌ 結構未達標", "大盤/均線多頭/VCP量縮")
 
+                # 自動展開詳細的各項指標判定拆解
                 with st.expander("📑 查看系統自動抓取的【護城河、價值網與財報】完整量化明細", expanded=False):
                     c_a, c_b = st.columns(2)
                     with c_a:
@@ -292,10 +304,14 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                         st.markdown("#### 🌐 價值網量化明細")
                         st.table(pd.DataFrame(list(vnet_details.items()), columns=["指標名稱", "數值與標準"]))
 
+                # 即時新聞列表與超連結
                 if parsed_news:
-                    with st.expander(f"📰 查看 {raw_ticker} 最新相關即時財經新聞 ({len(parsed_news)} 則)", expanded=True):
+                    with st.expander(f"📰 查看 {raw_ticker} 即時新聞與直達連結 ({len(parsed_news)} 則)", expanded=True):
                         for n in parsed_news:
-                            st.markdown(f"- **[{n['時間']}]** ({n['來源']}) {n['標題']}")
+                            if n['網址']:
+                                st.markdown(f"- **[{n['時間']}]** `{n['媒體']}` 👉 [{n['標題']}]({n['網址']})")
+                            else:
+                                st.markdown(f"- **[{n['時間']}]** `{n['媒體']}` {n['標題']}")
                 else:
                     st.info("ℹ️ 近期暫無此股票之重大新聞流。")
 
@@ -314,15 +330,15 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     
                     st.markdown("---")
                     st.subheader("🦅 1% 風險控管建議買入部位")
-                    st.write(f"- 當前突破價：**${curr_price:.2f}**")
-                    st.write(f"- 自動建議硬停損價：**${stop_price:.2f}** (停損距離: {risk_pct:.1f}%)")
+                    st.write(f"- 當前突破價：**NT$ {curr_price:.2f}**")
+                    st.write(f"- 自動建議硬停損價：**NT$ {stop_price:.2f}** (停損距離: {risk_pct:.1f}%)")
                     
                     if risk_pct > 8.0:
                         st.warning("⚠️ 警告：目前停損距離超過 8%，代表波動收縮不夠緊密，建議等待價格重新整理！")
                     
                     st.markdown(f"👉 **建議買入數量：:red[{shares_to_buy:,} 股]**")
-                    st.write(f"- 單筆最大承擔虧損 (1%)：**${max_risk_amount:,.2f}**")
-                    st.write(f"- 動用總資金 (名目曝險)：**${exposure:,.2f}** (佔帳戶 {(exposure/capital)*100:.1f}%)")
+                    st.write(f"- 單筆最大承擔虧損 (1%)：**NT$ {max_risk_amount:,.2f}**")
+                    st.write(f"- 動用總資金 (名目曝險)：**NT$ {exposure:,.2f}** (佔帳戶 {(exposure/capital)*100:.1f}%)")
                 else:
                     st.error("⛔ 交易否決：未完全符合嚴格標準，系統已自動為您攔截潛在投資風險！")
 
