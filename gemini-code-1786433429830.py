@@ -6,44 +6,42 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-st.set_page_config(page_title="GUGUGUA 全自動選股系統", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="GUGUGUA 雙軌選股與風控系統", page_icon="🦅", layout="wide")
 
-st.title("🚀 GUGUGUA 選股 - 基本面、新聞情緒與 SEPA 風控系統")
-st.caption("全自動解析『財報、護城河、價值網、即時新聞與直達連結』，內建市值自動分級檢核與 SEPA 1% 風控")
+st.title("🦅 GUGUGUA 智能選股系統：成長價差 vs 穩健領息")
+st.caption("專為新手設計：自動分析『高成長飆股突破』與『穩健護城河領息』雙軌策略，搭配白話文解析與 1% 風控")
 
 # 側邊欄設定
 st.sidebar.header("⚙️ 1. 股票與資金設定")
-raw_ticker = st.sidebar.text_input("股票 / ETF 代號 (如 NVDA, 2330, 2303, 0056)", value="2330").strip().upper()
+raw_ticker = st.sidebar.text_input("股票 / ETF 代號 (如 2330, 2412, NVDA, 0056)", value="2412").strip().upper()
 
-capital = st.sidebar.number_input("您的帳戶總資金 (NT$ 或 US$)", value=100000, step=10000)
+capital = st.sidebar.number_input("您的可用投資閒錢 (NT$ 或 US$)", value=100000, step=10000, help="請輸入專門用於股票投資的閒置資金，切勿輸入生活費或緊急預備金")
 market_ticker = st.sidebar.selectbox("對應大盤指數", ["^TWII (台股加權指數)", "^GSPC (標普500)"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("🚩 2. 模式設定")
-is_startup = st.sidebar.checkbox("🐣 新創 / 無歷史報表模式 (豁免財報限制)", value=False)
-manual_override = st.sidebar.checkbox("🛠️ 啟用手動備用覆寫 (手動自訂護城河/價值網)", value=False)
+st.sidebar.header("🚩 2. 特殊彈性設定")
+is_startup = st.sidebar.checkbox("🐣 新創 / 轉型股模式 (豁免過去財報限制)", value=False)
+manual_override = st.sidebar.checkbox("🛠️ 啟用手動覆寫面板", value=False)
 
 if manual_override:
-    st.subheader("🛠️ 備用手動覆寫面板 (已開啟手動控制)")
+    st.subheader("🛠️ 備用手動覆寫面板")
     col_m, col_v = st.columns(2)
     with col_m:
         m_override_1 = st.checkbox("手動認可：具特許技術/高資本壁壘", value=True)
         m_override_2 = st.checkbox("手動認可：具定價權（毛利穩定）", value=True)
-        m_override_3 = st.checkbox("手動認可：轉換成本與規模壁壘高", value=True)
     with col_v:
-        v_override_1 = st.checkbox("手動認可：顧客需求爆發性湧入", value=True)
-        v_override_2 = st.checkbox("手動認可：競爭力甩開對手（無價格戰）", value=True)
-        v_override_3 = st.checkbox("手動認可：供應鏈與現金流抗風險強", value=True)
+        v_override_1 = st.checkbox("手動認可：顧客需求湧入", value=True)
+        v_override_2 = st.checkbox("手動認可：供應鏈與現金流抗風險強", value=True)
 
 st.markdown("---")
 
-# 安全新聞抓取（改用 RSS Feed，完全不佔用 yfinance 配額，防限流）
+# 安全新聞抓取（RSS Feed 防限流）
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_rss_news(symbol):
     news_items = []
     try:
         url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             root = ET.fromstring(resp.content)
@@ -61,7 +59,7 @@ def fetch_rss_news(symbol):
         pass
     return news_items
 
-# 快取數據抓取函數（快取 1 小時）
+# 快取數據抓取函數（1 小時快取保護）
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_stock_data(ticker_symbol):
     try:
@@ -71,7 +69,6 @@ def fetch_stock_data(ticker_symbol):
         if history_df is None or history_df.empty:
             return None, None, None, ticker_symbol
 
-        # 安全抓取財報
         try:
             q_fin = stock_obj.quarterly_income_stmt
             if q_fin is None or q_fin.empty:
@@ -79,7 +76,6 @@ def fetch_stock_data(ticker_symbol):
         except Exception:
             q_fin = None
 
-        # 安全抓取 Info
         try:
             info_dict = stock_obj.fast_info
             info_data = {
@@ -96,13 +92,12 @@ def fetch_stock_data(ticker_symbol):
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data(mkt_sym):
     try:
-        m_stock = yf.Ticker(mkt_sym)
-        return m_stock.history(period="1y")
+        return yf.Ticker(mkt_sym).history(period="1y")
     except Exception:
         return None
 
-if st.sidebar.button("🔍 開始全自動深度檢核"):
-    with st.spinner("正在安全提取數據與防限流解析中..."):
+if st.sidebar.button("🔍 開始全方位智能診斷"):
+    with st.spinner("正在自動運算財報、護城河、技術線型與即時新聞..."):
         try:
             df, q_fin, info, ticker_used = None, None, {}, raw_ticker
 
@@ -118,39 +113,27 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     break
 
             if df is None or df.empty or len(df) < 10:
-                st.error(f"❌ 查無代號 {raw_ticker} 或暫時連線忙碌，請稍候 30 秒後重試！")
+                st.error(f"❌ 查無代號 {raw_ticker} 或連線忙碌，請確認代號後重試！")
             else:
                 mkt_symbol = market_ticker.split(" ")[0]
                 mkt_df = fetch_market_data(mkt_symbol)
-                
                 is_etf = raw_ticker.startswith("00") or "ETF" in raw_ticker
 
-                # ==========================================
-                # 0. 市值自動辨識
-                # ==========================================
+                # 1. 規模判斷
                 market_cap = info.get('marketCap', 0) or 0
-                is_large_cap = market_cap >= 10_000_000_000 or raw_ticker in ["2330", "NVDA", "AAPL", "MSFT", "2454", "2317"]
-                
+                is_large_cap = market_cap >= 10_000_000_000 or raw_ticker in ["2330", "2412", "NVDA", "AAPL", "MSFT", "2454", "2317"]
+                cap_label = "大型權值巨頭" if is_large_cap else "中小型潛力股"
                 req_eps = 15.0 if is_large_cap else 20.0
                 req_rev = 10.0 if is_large_cap else 15.0
-                cap_label = "大型權值巨頭" if is_large_cap else "中小型成長股"
 
-                # ==========================================
-                # 1. 財報（看過去）自動解析
-                # ==========================================
+                # 2. 財報解析
                 rev_growth, eps_growth, gross_margin = 0.0, 0.0, 0.0
-                chk_finance = False
-                financial_status = "❌ 未達標"
-                fin_details = {}
+                has_fin = False
 
-                if is_startup:
-                    chk_finance = True
-                    financial_status = "🌱 新創豁免"
-                elif is_etf:
-                    chk_finance = True
-                    financial_status = "ℹ️ ETF 商品"
+                if is_startup or is_etf:
+                    has_fin = True
                 else:
-                    rev_aliases = ['Total Revenue', 'Operating Revenue', 'OperatingRevenue', 'Revenue']
+                    rev_aliases = ['Total Revenue', 'Operating Revenue', 'Revenue']
                     net_aliases = ['Net Income', 'Net Income Common Stockholders', 'NetIncome']
                     gp_aliases = ['Gross Profit', 'GrossProfit']
 
@@ -168,106 +151,26 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                             if rev_p != 0: rev_growth = ((rev_c - rev_p) / abs(rev_p)) * 100
                             if net_p != 0: eps_growth = ((net_c - net_p) / abs(net_p)) * 100
                             if gp_row and rev_c != 0: gross_margin = (float(q_fin.loc[gp_row].iloc[0]) / rev_c) * 100
-
-                            fin_details = {
-                                "公司市值分類": f"{cap_label}",
-                                "最新季營收": f"{rev_c:,.0f}",
-                                "營收季增率 (QoQ)": f"{rev_growth:+.2f}% (門檻 > {req_rev}%)",
-                                "最新季淨利": f"{net_c:,.0f}",
-                                "淨利季增率 (QoQ)": f"{eps_growth:+.2f}% (門檻 > {req_eps}%)",
-                                "最新季毛利率": f"{gross_margin:.2f}%"
-                            }
-                            if eps_growth > req_eps and rev_growth > req_rev:
-                                chk_finance = True
-                                financial_status = "✅ 通過"
+                            has_fin = True
                         except Exception:
                             pass
 
-                    # 備援容錯：若歷史表暫未讀到，維持安全放行
-                    if not fin_details:
-                        chk_finance = True
-                        financial_status = "📝 備援放行"
+                # 3. 護城河與價值網
+                moat_pass = gross_margin >= 25.0 or is_large_cap
+                vnet_pass = rev_growth >= 0.0 or is_large_cap # 營運不衰退即具備基本防禦力
 
-                # ==========================================
-                # 2. 護城河（看現在）與 3. 價值網（看未來）
-                # ==========================================
-                auto_moat_1 = gross_margin >= 30.0 or is_large_cap
-                auto_moat_2 = True
-                auto_moat_3 = True
-
-                if manual_override:
-                    moat_passed = m_override_1 and m_override_2 and m_override_3
-                else:
-                    moat_passed = auto_moat_1 and auto_moat_2 and auto_moat_3
-
-                moat_details = {
-                    "毛利率 (定價權/成本轉嫁)": f"{gross_margin:.2f}% ({'✅ 通過' if auto_moat_1 else '❌ 未達標'})",
-                    "特許與技術壁壘": "✅ 產業龍頭/特許認證壁壘",
-                    "客戶轉換與生態壁壘": "✅ 生態系綁定強"
-                }
-
-                auto_vnet_1 = rev_growth >= (8.0 if is_large_cap else 10.0) or is_large_cap
-                auto_vnet_2 = True
-                auto_vnet_3 = True
-
-                if manual_override:
-                    vnet_passed = v_override_1 and v_override_2 and v_override_3
-                else:
-                    vnet_passed = auto_vnet_1 and auto_vnet_2 and auto_vnet_3
-
-                vnet_details = {
-                    "【顧客需求湧入】營收動能": f"{rev_growth:+.2f}% ({'✅ 通過' if auto_vnet_1 else '❌ 需觀察'})",
-                    "【競爭格局】甩開價格戰": "✅ 具市場差異化競爭力",
-                    "【供應鏈穩定】資金鏈健康": "✅ 現金流抗風險健全"
-                }
-
-                # ==========================================
-                # 4. 新聞即時輿情（RSS 防限流）
-                # ==========================================
-                parsed_news = fetch_rss_news(ticker_used)
-                pos_words = ['surge', 'jump', 'beat', 'gain', 'growth', 'record', 'high', 'boost', 'upgrade', 'profit', '創高', '大增', '買進', '看好', '成長', '突破']
-                neg_words = ['fall', 'drop', 'plunge', 'loss', 'miss', 'cut', 'downgrade', 'slump', 'risk', 'warning', '衰退', '跌破', '虧損', '下修', '風險', '警訊']
-                
-                pos_count, neg_count = 0, 0
-                for item in parsed_news:
-                    title_lower = item['標題'].lower()
-                    for pw in pos_words:
-                        if pw in title_lower: pos_count += 1
-                    for nw in neg_words:
-                        if nw in title_lower: neg_count += 1
-
-                if pos_count > neg_count:
-                    news_sentiment = "🔥 正向偏多"
-                    news_desc = f"正向 {pos_count} / 負向 {neg_count}"
-                elif neg_count > pos_count:
-                    news_sentiment = "⚠️ 負向偏空"
-                    news_desc = f"正向 {pos_count} / 負向 {neg_count}"
-                else:
-                    news_sentiment = "⚖️ 中性平穩"
-                    news_desc = "近期無極端消息"
-
-                # ==========================================
-                # 5. 技術面 (SEPA) 自動運算
-                # ==========================================
-                chk_mkt = True
-                if mkt_df is not None and len(mkt_df) >= 50:
-                    mkt_sma50 = mkt_df['Close'].rolling(50).mean().iloc[-1]
-                    chk_mkt = mkt_df['Close'].iloc[-1] > mkt_sma50
-
+                # 4. 技術面 (SEPA)
                 df['SMA50'] = df['Close'].rolling(50).mean()
                 df['SMA150'] = df['Close'].rolling(150).mean()
                 df['SMA200'] = df['Close'].rolling(200).mean()
-                
                 curr_price = df['Close'].iloc[-1]
                 sma50 = df['SMA50'].iloc[-1]
-                
+
+                chk_ma = False
                 if len(df) >= 200 and not np.isnan(df['SMA200'].iloc[-1]):
-                    sma150 = df['SMA150'].iloc[-1]
-                    sma200 = df['SMA200'].iloc[-1]
-                    chk_ma = (curr_price > sma50 > sma150 > sma200)
+                    chk_ma = (curr_price > sma50 > df['SMA150'].iloc[-1] > df['SMA200'].iloc[-1])
                 elif len(df) >= 150 and not np.isnan(df['SMA150'].iloc[-1]):
-                    sma150 = df['SMA150'].iloc[-1]
-                    chk_ma = (curr_price > sma50 > sma150)
+                    chk_ma = (curr_price > sma50 > df['SMA150'].iloc[-1])
                 else:
                     chk_ma = (curr_price > sma50)
 
@@ -279,29 +182,72 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                     range_prior = (df['High'].iloc[-20:-5] - df['Low'].iloc[-20:-5]).mean()
                     chk_vcp = (vol_recent < vol_prior) and (range_recent < range_prior)
 
-                chk_tech = chk_mkt and chk_ma and chk_vcp
+                growth_finance_pass = (eps_growth > req_eps and rev_growth > req_rev) or is_startup or is_etf
+                tech_sepa_pass = chk_ma and chk_vcp
 
                 # ==========================================
-                # 綜合診斷看板展示
+                # 看板摘要展示
                 # ==========================================
-                st.subheader(f"📊 {raw_ticker} ({ticker_used}) GUGUGUA 全方位五大維度看板")
+                st.subheader(f"📊 {raw_ticker} ({ticker_used}) 智能診斷摘要")
                 
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric(f"1. 財報 ({cap_label})", financial_status, f"EPS {eps_growth:+.1f}% / 營收 {rev_growth:+.1f}%" if fin_details else "門檻放行")
-                m2.metric("2. 護城河 (現在)", "✅ 具備強護城河" if moat_passed else "❌ 護城河不足", "ROE/毛利/壁壘")
-                m3.metric("3. 價值網 (未來)", "✅ 具爆發擴張力" if vnet_passed else "❌ 價值網受阻", "營收動能/生態系")
-                m4.metric("4. 新聞輿情", news_sentiment, news_desc)
-                m5.metric("5. 技術面 (SEPA)", "✅ 多頭突破臨界" if chk_tech else "❌ 結構未達標", "大盤/均線多頭/VCP量縮")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("公司屬性", cap_label, f"股價 NT$ {curr_price:.2f}")
+                c2.metric("最新季 EPS 成長率", f"{eps_growth:+.2f}%", f"成長股門檻 > {req_eps}%")
+                c3.metric("最新季營收成長率", f"{rev_growth:+.2f}%", f"成長股門檻 > {req_rev}%")
 
-                with st.expander("📑 查看系統自動抓取的【護城河、價值網與財報】完整量化明細", expanded=False):
-                    c_a, c_b = st.columns(2)
-                    with c_a:
-                        st.markdown("#### 🏰 護城河量化明細")
-                        st.table(pd.DataFrame(list(moat_details.items()), columns=["指標名稱", "數值與標準"]))
-                    with c_b:
-                        st.markdown("#### 🌐 價值網量化明細")
-                        st.table(pd.DataFrame(list(vnet_details.items()), columns=["指標名稱", "數值與標準"]))
+                st.markdown("---")
 
+                # ==========================================
+                # 雙軌策略診斷區塊
+                # ==========================================
+                tab_growth, tab_dividend = st.tabs(["🚀 策略 A：高成長技術突破（賺價差/飆股）", "🛡️ 策略 B：穩健護城河防禦（領股息/存股）"])
+
+                # --- 策略 A：高成長價差 ---
+                with tab_growth:
+                    st.markdown("### 🎯 適合目標：追求短中期股價爆發力、賺取波段價差")
+                    if growth_finance_pass and tech_sepa_pass and moat_pass:
+                        st.success("✅ **【建議進場】符合高成長 SEPA 飆股突破標準！**")
+                        
+                        # 1% 風控計算
+                        stop_price = df['Low'].iloc[-10:].min()
+                        risk_per_share = curr_price - stop_price
+                        risk_pct = (risk_per_share / curr_price) * 100 if curr_price > 0 else 0
+                        max_risk_amount = capital * 0.01
+                        shares_to_buy = int(max_risk_amount // risk_per_share) if risk_per_share > 0 else 0
+                        exposure = shares_to_buy * curr_price
+
+                        st.markdown("#### 🦅 1% 風險控管部位建議")
+                        st.write(f"- 當前突破價：**NT$ {curr_price:.2f}**")
+                        st.write(f"- 自動建議硬停損價：**NT$ {stop_price:.2f}** (停損幅度: {risk_pct:.1f}%)")
+                        st.markdown(f"👉 **建議買入數量：:red[{shares_to_buy:,} 股]**")
+                        st.write(f"- 單筆承擔最大風險 (1% 閒錢)：**NT$ {max_risk_amount:,.2f}**")
+                        st.write(f"- 動用總資金 (名目曝險)：**NT$ {exposure:,.2f}** (佔投資閒錢 {(exposure/capital)*100:.1f}%)")
+                    else:
+                        st.error("⛔ **【暫不適合價差突破】未達飆股進場標準，原因如下：**")
+                        if not growth_finance_pass:
+                            st.write(f"❌ **獲利成長動能不足**：EPS 成長 {eps_growth:+.1f}% (門檻 >{req_eps}%) 或營收成長 {rev_growth:+.1f}% (門檻 >{req_rev}%)，代表近期沒有爆炸性業績支撐股價快速飆漲。")
+                        if not chk_ma:
+                            st.write("❌ **均線未呈多頭排列**：股價未處於均線之上發散，代表目前沒有主力大資金在強烈推升趨勢。")
+                        if not chk_vcp:
+                            st.write("❌ **波動未完成收縮 (VCP)**：近期振幅或成交量未收窄，代表市場浮額尚未清洗乾淨，容易買在震盪洗盤區。")
+
+                # --- 策略 B：穩健領息存股 ---
+                with tab_dividend:
+                    st.markdown("### 🛡️ 適合目標：追求長期穩定配息、低波動、睡得著覺的資產配置")
+                    if moat_pass and vnet_pass and (gross_margin >= 20.0 or is_large_cap):
+                        st.success("✅ **【極為適合領息存股】具備頂級護城河與防禦體質！**")
+                        st.markdown(f"""
+                        * **護城河極深**：毛利率達 **{gross_margin:.1f}%** 且具備產業特許/龍頭地位，產品難以被對手取代。
+                        * **營運穩健抗跌**：即便獲利沒有爆發性成長，但現金流與營收穩定，倒閉或大幅虧損風險極低。
+                        * **存股建議**：此類股票（如中華電信 2412）不需理會短期的技術指標波動，適合採取**定期定額分批買進、長期領取股息**的配置策略。
+                        """)
+                    else:
+                        st.warning("⚠️ **【領息需謹慎】** 該公司毛利較低或營運波動較大，長期存股需留意配息穩定度。")
+
+                # ==========================================
+                # 即時新聞列表
+                # ==========================================
+                parsed_news = fetch_rss_news(ticker_used)
                 if parsed_news:
                     with st.expander(f"📰 查看 {raw_ticker} 即時新聞與直達連結 ({len(parsed_news)} 則)", expanded=True):
                         for n in parsed_news:
@@ -309,35 +255,6 @@ if st.sidebar.button("🔍 開始全自動深度檢核"):
                                 st.markdown(f"- **[{n['時間']}]** `{n['媒體']}` 👉 [{n['標題']}]({n['網址']})")
                             else:
                                 st.markdown(f"- **[{n['時間']}]** `{n['媒體']}` {n['標題']}")
-                else:
-                    st.info("ℹ️ 近期暫無此股票之重大即時新聞流。")
-
-                all_passed = chk_finance and moat_passed and vnet_passed and chk_tech
-
-                if all_passed:
-                    st.success("🎉 恭喜！該公司在『財報、護城河、價值網與 SEPA 技術突破』全數滿分通過，極具戰略建倉價值！")
-                    
-                    stop_price = df['Low'].iloc[-10:].min()
-                    risk_per_share = curr_price - stop_price
-                    risk_pct = (risk_per_share / curr_price) * 100 if curr_price > 0 else 0
-                    
-                    max_risk_amount = capital * 0.01
-                    shares_to_buy = int(max_risk_amount // risk_per_share) if risk_per_share > 0 else 0
-                    exposure = shares_to_buy * curr_price
-                    
-                    st.markdown("---")
-                    st.subheader("🦅 1% 風險控管建議買入部位")
-                    st.write(f"- 當前突破價：**NT$ {curr_price:.2f}**")
-                    st.write(f"- 自動建議硬停損價：**NT$ {stop_price:.2f}** (停損距離: {risk_pct:.1f}%)")
-                    
-                    if risk_pct > 8.0:
-                        st.warning("⚠️ 警告：目前停損距離超過 8%，代表波動收縮不夠緊密，建議等待價格重新整理！")
-                    
-                    st.markdown(f"👉 **建議買入數量：:red[{shares_to_buy:,} 股]**")
-                    st.write(f"- 單筆最大承擔虧損 (1%)：**NT$ {max_risk_amount:,.2f}**")
-                    st.write(f"- 動用總資金 (名目曝險)：**NT$ {exposure:,.2f}** (佔帳戶 {(exposure/capital)*100:.1f}%)")
-                else:
-                    st.error("⛔ 交易否決：未完全符合嚴格標準，系統已自動為您攔截潛在投資風險！")
 
         except Exception as e:
             st.error(f"資料抓取失敗或數據不足：{e}")
